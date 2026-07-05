@@ -69,6 +69,16 @@ The patcher aborts if it applies suspiciously few rewrites (< 60), so it won't s
 - `Compat/build.sh` — 兼容层构建脚本 / shim build script
 - `patch.sh` — 一键完整管线 / one-shot pipeline
 
+## 🙏 致谢 / Credits
+
+Overlayer 的全部功能来自原项目及其贡献者,本仓库只做 Unity 6 兼容修复:
+
+All of Overlayer's functionality comes from the original project and its contributors; this repo only adds the Unity 6 compatibility fix:
+
+- [c3nb](https://github.com/c3nb) — Overlayer 原作者 / original author ([c3nb/Overlayer](https://github.com/c3nb/Overlayer))
+- [Kkitut](https://github.com/Kkitut) — modlist.org 维护版主要开发者 / main developer of the modlist.org fork ([modlist-org/Overlayer](https://github.com/modlist-org/Overlayer))
+- [square3ang](https://github.com/square3ang) — modlist.org 维护版贡献者 / contributor to the modlist.org fork
+
 ## ⚖️ 许可 / License
 
 本仓库的补丁器与兼容层代码采用 [MIT License](LICENSE)。Overlayer 本体及其发行文件版权归原作者所有,Release 中的补丁版仅为兼容修复再分发,如原作者提出异议将立即撤下。
