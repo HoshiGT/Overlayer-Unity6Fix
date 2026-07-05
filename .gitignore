@@ -1,0 +1,8 @@
+# binaries — the original Overlayer.dll is not ours to redistribute in source form,
+# and everything else is a build artifact (patched dll ships via GitHub Releases)
+orig/
+*.dll
+*.exe
+*.zip
+Compat/bin/
+Compat/build.rsp
