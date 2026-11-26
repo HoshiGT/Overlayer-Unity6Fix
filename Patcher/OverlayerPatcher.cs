@@ -40,7 +40,12 @@ class OverlayerPatcher
         var game = gameAsm.MainModule;
         var releasesType = mod.ImportReference(game.GetType("Releases"));
         var scrPlayerType = mod.ImportReference(game.GetType("scrPlayer"));
+        var difficultyType = mod.ImportReference(game.GetType("Difficulty"));
+        var hitMarginType = mod.ImportReference(game.GetType("HitMargin"));
         var consecField = mod.ImportReference(game.GetType("scrPlayer").Fields.First(f => f.Name == "consecMultipressCounter"));
+        var accStatsType = mod.GetType("Overlayer.Tags.AccuracyStats");
+        var mainType = mod.GetType("Overlayer.Main");
+        var mainGetAss = mainType.Methods.First(m => m.Name == "get_Ass");
 
         // ---- pass 1: retarget SFB TypeRefs from Assembly-CSharp-firstpass to the compat assembly ----
         // the compat method imports above already added an AssemblyNameReference; reuse it
@@ -218,6 +223,11 @@ class OverlayerPatcher
                         a.ConstructorArguments[2] = new CustomAttributeArgument(mod.TypeSystem.String, "CalculateTotalAccuracy");
                         patched++; Log("LazyPatch CalculatePercentAcc -> CalculateTotalAccuracy");
                     }
+                    if (ca.Count >= 3 && (string)ca[1].Value == "scrMisc" && (string)ca[2].Value == "GetHitMargin")
+                    {
+                        a.ConstructorArguments[2] = new CustomAttributeArgument(mod.TypeSystem.String, "GetHitMarginInDeg");
+                        patched++; Log("LazyPatch GetHitMargin -> GetHitMarginInDeg on " + t.FullName);
+                    }
                 }
             }
             if (t.FullName.Contains("Hit__OnDamage"))
@@ -227,6 +237,123 @@ class OverlayerPatcher
                 {
                     pf.Parameters[0].ParameterType = scrPlayerType;
                     patched++; Log("Postfix __instance: scrController -> scrPlayer");
+                }
+            }
+
+            // ---- pass 3b: r150 AccuracyStats__CalculatePercentAcc -> Compat.CalcAccuracy ----
+            if (t.FullName.Contains("AccuracyStats__CalculatePercentAcc"))
+            {
+                var pf = t.Methods.FirstOrDefault(m2 => m2.Name == "Postfix");
+                if (pf != null && pf.HasBody && accStatsType != null)
+                {
+                    pf.Body.Instructions.Clear();
+                    pf.Body.ExceptionHandlers.Clear();
+                    pf.Body.Variables.Clear();
+                    var il = pf.Body.GetILProcessor();
+                    il.Append(Instruction.Create(OpCodes.Ldarg_0));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "Accuracy")));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "XAccuracy")));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "AbsXAccuracy")));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "MaxAccuracy")));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "MaxXAccuracy")));
+                    il.Append(Instruction.Create(OpCodes.Ldsflda, accStatsType.Fields.First(f => f.Name == "AbsMaxXAccuracy")));
+                    il.Append(Instruction.Create(OpCodes.Call, C["CalcAccuracy"]));
+                    il.Append(Instruction.Create(OpCodes.Ret));
+                    patched++; Log("Rewrote AccuracyStats__CalculatePercentAcc.Postfix -> Compat.CalcAccuracy");
+                }
+            }
+
+            // ---- pass 3c: r150 P_scrMisc (Hit / Combo / Scores) -> GetHitMarginInDeg Postfixes ----
+            if (t.FullName.EndsWith("/Hit__GetHitMargin") || t.FullName.EndsWith("/Combo__GetHitMargin") || t.FullName.EndsWith("/Scores__GetHitMargin"))
+            {
+                string compatMethod = t.FullName.EndsWith("/Hit__GetHitMargin") ? "OnHitInDeg"
+                    : t.FullName.EndsWith("/Combo__GetHitMargin") ? "OnComboInDeg"
+                    : "OnScoresInDeg";
+                var hm = t.Methods.FirstOrDefault(m2 => m2.Name == "Prefix" || m2.Name == "Postfix");
+                if (hm != null && hm.HasBody)
+                {
+                    hm.Name = "Postfix";
+                    hm.ReturnType = mod.TypeSystem.Void;
+                    hm.Parameters.Clear();
+                    hm.Parameters.Add(new ParameterDefinition("difficulty", ParameterAttributes.None, difficultyType));
+                    hm.Parameters.Add(new ParameterDefinition("hitAngle", ParameterAttributes.None, mod.TypeSystem.Single));
+                    hm.Parameters.Add(new ParameterDefinition("refAngle", ParameterAttributes.None, mod.TypeSystem.Single));
+                    hm.Parameters.Add(new ParameterDefinition("clockwise", ParameterAttributes.None, mod.TypeSystem.Boolean));
+                    hm.Parameters.Add(new ParameterDefinition("floorBpm", ParameterAttributes.None, mod.TypeSystem.Single));
+                    hm.Parameters.Add(new ParameterDefinition("conductorPitch", ParameterAttributes.None, mod.TypeSystem.Single));
+                    hm.Parameters.Add(new ParameterDefinition("marginScale", ParameterAttributes.None, mod.TypeSystem.Double));
+                    hm.Parameters.Add(new ParameterDefinition("__result", ParameterAttributes.None, hitMarginType));
+                    hm.Body.Instructions.Clear();
+                    hm.Body.ExceptionHandlers.Clear();
+                    hm.Body.Variables.Clear();
+                    var il = hm.Body.GetILProcessor();
+                    for (int p = 0; p < 8; p++)
+                        il.Append(Instruction.Create(OpCodes.Ldarg, hm.Parameters[p]));
+                    il.Append(Instruction.Create(OpCodes.Call, C[compatMethod]));
+                    il.Append(Instruction.Create(OpCodes.Ret));
+                    patched++; Log("Rewrote " + t.FullName + ".Postfix -> Compat." + compatMethod);
+                }
+            }
+
+            // ---- pass 3d: Hit.Reset default HitMargin (3=PerfectMinus -> 4=XPerfect) ----
+            if (t.FullName == "Overlayer.Tags.Hit")
+            {
+                var rm = t.Methods.FirstOrDefault(m2 => m2.Name == "Reset");
+                if (rm != null && rm.HasBody && rm.Body.Instructions.Count > 0 && rm.Body.Instructions[0].OpCode == OpCodes.Ldc_I4_3)
+                {
+                    rm.Body.Instructions[0].OpCode = OpCodes.Ldc_I4_4;
+                    patched++; Log("Hit.Reset initial HitMargin 3 -> 4 (XPerfect)");
+                }
+            }
+
+            // ---- pass 3e: ComboStats.SpecialPlayMark r150 HitMargin names ----
+            if (t.FullName == "Overlayer.Tags.ComboStats")
+            {
+                var spm = t.Methods.FirstOrDefault(m2 => m2.Name == "SpecialPlayMark");
+                if (spm != null && spm.HasBody)
+                {
+                    foreach (var ins in spm.Body.Instructions)
+                    {
+                        if (ins.OpCode == OpCodes.Ldstr && ins.Operand is string s)
+                        {
+                            if (s == "Perfect")
+                            {
+                                ins.Operand = "PerfectMinus|XPerfect|PerfectPlus";
+                                patched++; Log("SpecialPlayMark: Perfect -> PerfectMinus|XPerfect|PerfectPlus");
+                            }
+                            else if (s == "VeryEarly|EarlyPerfect|Perfect|LatePerfect|VeryLate")
+                            {
+                                ins.Operand = "VeryEarly|EarlyPerfect|PerfectMinus|XPerfect|PerfectPlus|LatePerfect|VeryLate";
+                                patched++; Log("SpecialPlayMark: expanded Perfect in FC+ mask");
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- pass 3f: Overlayer.Main.OnToggle -> Compat.SyncR150Hooks(toggle, Ass) for GetHitMarginInSec ----
+            if (t.FullName == "Overlayer.Main")
+            {
+                var ot = t.Methods.FirstOrDefault(m2 => m2.Name == "OnToggle");
+                if (ot != null && ot.HasBody && ot.Body.Instructions.Count >= 2)
+                {
+                    var ins = ot.Body.Instructions;
+                    var last = ins[ins.Count - 1];
+                    var prev = ins[ins.Count - 2];
+                    if (last.OpCode == OpCodes.Ret && prev.OpCode == OpCodes.Ldc_I4_1)
+                    {
+                        // Mutate prev in-place so all branch targets jumping to prev execute SyncR150Hooks first
+                        prev.OpCode = OpCodes.Ldarg_1;
+                        prev.Operand = null;
+                        var il = ot.Body.GetILProcessor();
+                        var callAss = Instruction.Create(OpCodes.Call, mainGetAss);
+                        var callSync = Instruction.Create(OpCodes.Call, C["SyncR150Hooks"]);
+                        var pushTrue = Instruction.Create(OpCodes.Ldc_I4_1);
+                        il.InsertAfter(prev, callAss);
+                        il.InsertAfter(callAss, callSync);
+                        il.InsertAfter(callSync, pushTrue);
+                        patched++; Log("Injected Compat.SyncR150Hooks into Overlayer.Main.OnToggle");
+                    }
                 }
             }
         }

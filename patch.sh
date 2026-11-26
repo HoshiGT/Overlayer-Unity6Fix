@@ -15,7 +15,10 @@ set -e
 
 cd "$(dirname "$0")"
 
-GAME_MANAGED="${GAME_MANAGED:-$HOME/adofaimods/A Dance of Fire and Ice/A Dance of Fire and Ice_Data/Managed}"
+GAME_MANAGED="${GAME_MANAGED:-$HOME/.steam/debian-installation/steamapps/common/A Dance of Fire and Ice/ADanceOfFireAndIce_Data/Managed}"
+if [ ! -d "$GAME_MANAGED" ]; then
+  GAME_MANAGED="$HOME/adofaimods/A Dance of Fire and Ice/A Dance of Fire and Ice_Data/Managed"
+fi
 ORIG="${ORIG:-orig/Overlayer.dll}"
 OUT="${OUT:-Overlayer.patched.dll}"
 CECIL="${CECIL:-Patcher/Mono.Cecil.dll}"
